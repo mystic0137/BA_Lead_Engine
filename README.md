@@ -290,4 +290,4 @@ dpo_data = load_dataset("json", data_files="data/finetuning/dpo_log.jsonl")
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
