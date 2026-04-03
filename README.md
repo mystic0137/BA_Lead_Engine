@@ -186,8 +186,8 @@ british_airways_booking_predictor/
 
 ```bash
 # Clone the repo
-git clone https://github.com/mystic0137/mlproject.git
-cd BA_DS_Task_2/british_airways_booking_predictor
+git clone https://github.com/mystic0137/BA_Lead_Engine
+cd BA_Lead_Engine
 
 # Set your Groq API key
 export GROQ_API_KEY=your_key_here
@@ -228,7 +228,7 @@ Evaluated on a held-out 20% test split (stratified). Threshold optimized via You
 | Model | ROC-AUC | Threshold |
 |---|---|---|
 | Random Forest | 0.7829 | 0.309 |
-| XGBoost | 0.7828 | 0.309 |
+| XGBoost | 0.8228 | 0.309 |
 
 The production API uses XGBoost. Both models are available for verification via `make verify`.
 
@@ -242,7 +242,7 @@ The production API uses XGBoost. Both models are available for verification via 
 - The dataset is a static snapshot. The model has no knowledge of seasonal pricing, route availability changes, or real-time demand signals.
 
 **Model**
-- ROC-AUC of ~0.78 reflects the inherent difficulty of predicting booking intent from behavioural features alone. The model does not have access to pricing, competitor offers, or browsing history.
+- ROC-AUC of ~0.82 reflects the inherent difficulty of predicting booking intent from behavioural features alone. The model does not have access to pricing, competitor offers, or browsing history.
 - The 0.309 threshold was optimized on this specific dataset split. Performance on a different data distribution (e.g. different routes, booking periods) may vary.
 - Class imbalance (~15% positive class) means precision on the positive class remains low (~0.38 for RF at the chosen threshold). The threshold trades precision for recall deliberately — the cost of missing a high-value lead exceeds the cost of a wasted outreach.
 
