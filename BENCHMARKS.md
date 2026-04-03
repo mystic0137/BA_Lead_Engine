@@ -45,7 +45,7 @@ Neither metric measures total process memory. For that, sample
 ### Direct ONNX — 2.43ms for 1000 rows
 Irreducible model cost with zero HTTP overhead. ONNX runtime processes the entire
 batch in a single `session.run()` call using vectorized matrix operations.
-This is the performance floor — no approach can beat this number.
+This is the performance floor.
 
 ### Vectorized Batch HTTP — 156.73ms for 1000 rows
 Single HTTP request carrying all 1000 records. The 154.3ms gap over
