@@ -1,5 +1,5 @@
 # Byte-compiled / optimized / DLL files
-__pycache__/
+/__pycache__/
 *.py[cod]
 *$py.class
 
@@ -31,8 +31,8 @@ models/*
 !data/finetuning/.gitkeep
 !models/.gitkeep
 
-# Notebooks
-notebooks/.ipynb_checkpoints
+# notebook cache
+.ipynb_checkpoints
 
 # Meta data
 *.egg-info/
