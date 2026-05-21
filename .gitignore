@@ -19,6 +19,8 @@ env/
 !data/finetuning/
 !models/
 
+hf_models/
+
 # Data and Artifacts (The "Heavy" Stuff)
 data/chroma_db/*
 data/finetuning/*
@@ -30,6 +32,7 @@ models/*
 !data/chroma_db/.gitkeep
 !data/finetuning/.gitkeep
 !models/.gitkeep
+!hf_models/.gitkeep
 
 # notebook cache
 .ipynb_checkpoints
