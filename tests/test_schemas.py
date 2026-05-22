@@ -6,7 +6,6 @@ from app.schemas import (
     RAGGenerateRequest, RAGFeedbackRequest,
     PredictionRoworiented, PredictionColumnoriented, Meta,
 )
-from pydantic import ValidationError
 
 
 class TestRoworientedInput:
