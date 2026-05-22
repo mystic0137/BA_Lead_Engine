@@ -1,14 +1,13 @@
 # src/models.py
 import multiprocessing
-from typing import List, Optional
+from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field
-from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
 from src.config import ALL_FEATURE_COLS, NUMERIC_COLS, OHE_COLS, TARGET_ENCODE_COLS
 
-__all__ = ["XGBClassifier", "RandomForestClassifier", "get_xgb_model", "get_rf_model"]
+__all__ = ["XGBClassifier", "get_xgb_model"]
 
 DEFAULT_CPUS = max(1, multiprocessing.cpu_count() - 1)
 
@@ -37,15 +36,6 @@ def validate_features(df_columns: List[str], config: ModelConfig) -> None:
     missing = set(config.all_features) - set(df_columns)
     if missing:
         raise ValueError(f"Input data missing mandatory columns: {missing}")
-
-
-def get_rf_model(config: ModelConfig) -> RandomForestClassifier:
-    hyperparams = config.model_dump(include={
-        "n_estimators",
-        "random_state",
-        "n_jobs",
-    })
-    return RandomForestClassifier(class_weight="balanced", **hyperparams)
 
 
 def get_xgb_model(config: ModelConfig) -> XGBClassifier:
