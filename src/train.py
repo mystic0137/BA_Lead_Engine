@@ -16,15 +16,13 @@ from src.config import (
     ONNX_OPSET,
     RAW_DATA,
     MODELS_DIR,
-    RF_CONFIG_PATH,
-    RF_ONNX_PATH,
     XGBOOST_CONFIG_PATH,
     XGBOOST_ONNX_PATH,
     init_dirs,
 )
-from src.models import ModelConfig, XGBClassifier, get_rf_model, get_xgb_model, validate_features
+from src.models import ModelConfig, XGBClassifier, get_xgb_model, validate_features
 from src.preprocess import build_preprocessor
-from src.data_check import verify_integrity
+from src.data_check import verify_integrity, DataIntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +63,11 @@ def export_to_onnx(pipeline: Pipeline, X_sample: pd.DataFrame, save_path: Path) 
 def train(threshold: float = DEFAULT_THRESHOLD) -> None:
     init_dirs()
 
-    verify_integrity()
+    try:
+        verify_integrity()
+    except DataIntegrityError as e:
+        logger.error(str(e))
+        raise
 
     logger.info("Data Integrity Verified. Loading Data...")
 
@@ -86,29 +88,20 @@ def train(threshold: float = DEFAULT_THRESHOLD) -> None:
     spw = (len(y_train) - y_train.sum()) / y_train.sum()
     X_sample = X_train.iloc[:1]
 
-    rf_pipeline = Pipeline([
-        ("preprocessor", build_preprocessor()),
-        ("rf_classifier", get_rf_model(config)),
-    ])
-    xgb_pipeline = Pipeline([
+    pipeline = Pipeline([
         ("preprocessor", build_preprocessor()),
         ("xgb_classifier", get_xgb_model(config).set_params(scale_pos_weight=spw)),
     ])
 
-    logger.info("Training Random Forest (%d estimators)", config.n_estimators)
-    rf_pipeline.fit(X_train, y_train)
-    export_to_onnx(rf_pipeline, X_sample, RF_ONNX_PATH)
-
     logger.info("Training XGBoost (%d estimators)", config.n_estimators)
-    xgb_pipeline.fit(X_train, y_train)
-    export_to_onnx(xgb_pipeline, X_sample, XGBOOST_ONNX_PATH)
+    pipeline.fit(X_train, y_train)
+    export_to_onnx(pipeline, X_sample, XGBOOST_ONNX_PATH)
 
-    for config_path, name in [(RF_CONFIG_PATH, "RF"), (XGBOOST_CONFIG_PATH, "XGB")]:
-        full_config = config.model_dump()
-        full_config["threshold"] = threshold
-        full_config["model_type"] = name
-        with open(config_path, "w") as f:
-            json.dump(full_config, f, indent=4)
+    full_config = config.model_dump()
+    full_config["threshold"] = threshold
+    full_config["model_type"] = "XGB"
+    with open(XGBOOST_CONFIG_PATH, "w") as f:
+        json.dump(full_config, f, indent=4)
 
     logger.info("Training complete. Models and configs saved.")
 
