@@ -11,7 +11,7 @@ This project combines a booking prediction pipeline with a lead prioritization e
 The system is split into two interconnected components:
 
 **Component 1 — Booking Predictor**
-A Random Forest and XGBoost classifier trained on customer booking behaviour, exported to ONNX for runtime-agnostic inference, and served via a FastAPI REST API.
+A Random Forest and XGBoost classifier trained on customer booking behaviour, exported to ONNX for runtime-agnostic inference, and served via a FastAPI REST API. Supports both row-oriented (per-record) and column-oriented (vectorized) inference paths.
 
 **Component 2 — RAG Email Generator**
 A Retrieval-Augmented Generation pipeline that retrieves relevant British Airways policy chunks from a ChromaDB vector store and generates compliance-grounded outreach emails via Llama-4-Scout on Groq.
@@ -23,40 +23,44 @@ Both components are surfaced through a Streamlit business intelligence dashboard
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Streamlit Dashboard                       │
-│  Batch Scoring │ Lead Queue │ Model Analysis │ Email Gen    │
-└────────────────────────┬────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      Streamlit Dashboard                      │
+│   Batch Scoring │ Lead Queue │ Model Analysis │ Email Gen     │
+└────────────────────────┬─────────────────────────────────────┘
                          │ HTTP
-┌────────────────────────▼────────────────────────────────────┐
-│                     FastAPI Backend                          │
-│         /predict  │  /predict/batch  │  /health             │
-└────────────────────────┬────────────────────────────────────┘
+┌────────────────────────▼─────────────────────────────────────┐
+│                       FastAPI Backend                          │
+│  /predict/single │ /predict/row_oriented                      │
+│  /predict/column_oriented │ /api/v1/rag/generate              │
+│  /api/v1/rag/feedback │ /health                               │
+└────────────────────────┬─────────────────────────────────────┘
                          │
-         ┌───────────────┴───────────────┐
-         │                               │
-┌────────▼────────┐             ┌────────▼────────┐
-│  ONNX Runtime   │             │  Lead Valuation  │
-│  XGBoost Model  │             │  BACostCalculator│
-│  (Inference)    │             │  (Segmentation)  │
-└─────────────────┘             └─────────────────┘
+              ┌──────────┴──────────┐
+              │                     │
+     ┌────────▼────────┐   ┌───────▼────────┐
+     │  InferenceEngine │   │  MLState       │
+     │  ONNX Runtime    │   │  (Singleton)   │
+     │  XGBoost Model   │   │                 │
+     │  BACostCalculator│   │ Embedding Model │
+     │  (Segmentation)  │   │ ChromaDB Client │
+     └─────────────────┘   │ Groq Client     │
+                           └────────────────┘
 
-┌─────────────────────────────────────────────────────────────┐
-│                    RAG Email Pipeline                        │
-│                                                             │
-│  BA Policy Docs → ChromaDB → Retriever → Llama-4-Scout     │
-│                                           (Groq API)        │
-│                                               │             │
-│                              Feedback Logger ─┘             │
-│                    (sft_log.jsonl / dpo_log.jsonl)          │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     RAG Email Pipeline                        │
+│                                                               │
+│   BA Policy Docs → ChromaDB → Retriever → Llama-4-Scout      │
+│                                            (Groq API)         │
+│                                                │              │
+│                               Feedback Logger ─┘              │
+│                     (sft_log.jsonl / dpo_log.jsonl)           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 **Data Integrity**
 - To ensure **Reproducibility**, this system implements strict data integrity check. The raw dataset (`customer_booking.csv`) is locked via **SHA-256** checksum defined in (`src/config.py`). If the dataset is tampered with, corrupted, or modified, the pipeline will raise a `Data Integrity Violation` and halt.
-
 
 ---
 
@@ -65,8 +69,11 @@ Both components are surfaced through a Streamlit business intelligence dashboard
 **Why ONNX for models instead of Pickle(.pkl)**
 - Standard Python .pkl are version dependent and pose security risks (Contain malicious code that can execute commands that pose threat to your system). By exporting XGBoost to ONNX, I've decoupled training environment from production API. This ensures sub millisecond latency and allows model to be served in any environment without python runtime dependency.
 
+**Row-Oriented vs Column-Oriented Inference**
+- The system exposes two inference paths: **row-oriented** (per-record Python loop with `BACostCalculator.calculate_lead_value`) and **column-oriented** (fully vectorized NumPy with `BACostCalculator.vectorized_calculate_lead_value`). Benchmarks show the column-oriented path is **~2.7x faster** on a 1000-record batch, achieved by replacing per-row function calls with `np.select` and `np.vectorize`. See `BENCHMARKS.md` for detailed latency and memory measurements.
+
 **RAG as a Token Budgeting Strategy**
-- While BA policy documents are small to fit in a large context window. I implemented a ChromaDB-backed RAG pipeline to simulate production constraints. This serves as a Semantic Pre-filtering layer, reducing the prompt size from ~20k tokens to ~4k tokens. This 5x reduction in "token ingress" is critical for staying within the 30k TPM limits of the Groq API while maintaining high grounding accuracy.
+- While BA policy documents are small to fit in a large context window, I implemented a ChromaDB-backed RAG pipeline to simulate production constraints. This serves as a Semantic Pre-filtering layer, reducing the prompt size from ~20k tokens to ~4k tokens. This 5x reduction in "token ingress" is critical for staying within the 30k TPM limits of the Groq API while maintaining high grounding accuracy.
 - Whereas in production, LLMs often provide million-token context windows and Prompt Caching capabilities that could technically ingest the entire policy library at once. In that scenario, a complex RAG pipeline might seem like overkill; you could simply use Few-Shot Prompting to load the full text into the system prompt once and letting the model's internal attention mechanism handle the retrieval.
 
 **The "Data Flywheel" logging**
@@ -78,12 +85,20 @@ Both components are surfaced through a Streamlit business intelligence dashboard
 
 **ML Pipeline**
 - Random Forest and XGBoost classifiers trained with sklearn pipelines
-- Target encoding for high-cardinality categorical features (`route`, `booking_origin`, `flight_day`)
-- One-hot encoding for low-cardinality categoricals (`sales_channel`, `trip_type`)
+- Target encoding for high-cardinality categorical features (`route`, `booking_origin`)
+- One-hot encoding for low-cardinality categoricals (`sales_channel`, `trip_type`, `flight_day`)
 - Class imbalance handled via `scale_pos_weight` (XGBoost) and `class_weight="balanced"` (RF)
 - Youden's J threshold optimization (threshold = 0.309)
 - ONNX export for runtime-agnostic inference via `skl2onnx` + `onnxmltools`
 - Per-model config JSON serialization (threshold, features, model type)
+- Data integrity verification via SHA-256 checksum before training
+
+**Inference Engine**
+- Dual inference paths: row-oriented (per-record) and column-oriented (vectorized)
+- CSV upload endpoint for column-oriented batch inference
+- ONNX Runtime CPU execution with 2-4 millisecond latency
+- Thread-safe priority queue for lead management (`heapq` + `threading.Lock`)
+- JSONL export of prioritized lead queue
 
 **Lead Segmentation**
 Four segments derived from booking probability × lead value:
@@ -126,13 +141,15 @@ Lead value calculated from flight duration tier (short/medium/long haul), add-on
 |---|---|
 | ML Training | scikit-learn, XGBoost |
 | ONNX Export | skl2onnx, onnxmltools, onnxconverter-common |
-| Inference | ONNX Runtime |
+| Inference | ONNX Runtime (CPUExecutionProvider) |
 | API | FastAPI, Pydantic V2, Uvicorn |
 | Vector DB | ChromaDB |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2) |
 | LLM | Llama-4-Scout-17B via Groq API |
 | Dashboard | Streamlit, Plotly |
-| Validation | Pydantic V2 |
+| Validation | Pydantic V2, Pydantic-Settings |
+| Testing | pytest, pytest-asyncio, httpx |
+| Containerization | Docker, Docker Compose |
 | Python | 3.10+ |
 
 ---
@@ -142,33 +159,62 @@ Lead value calculated from flight duration tier (short/medium/long haul), add-on
 ```
 british_airways_booking_predictor/
 ├── src/
-│   ├── config.py               # All paths, constants, system prompt registry
+│   ├── config.py               # All paths, constants, system prompt registry, Settings
+│   ├── data_check.py           # SHA-256 data integrity verification
 │   ├── models.py               # ModelConfig, get_rf_model, get_xgb_model
 │   ├── preprocess.py           # ColumnTransformer pipeline (TargetEncoder + OHE)
 │   ├── train.py                # Training, ONNX export, config serialization
-│   └── analytics/
-│       └── finance.py          # BACostCalculator, lead segmentation logic
+│   ├── analytics/
+│   │   └── finance.py          # BACostCalculator, lead segmentation, priority queue
+│   ├── inference/
+│   │   └── engine.py           # InferenceEngine: ONNX session, row/column inference
 │   └── rag/
 │       ├── ingest.py           # PDF/MD ingestion, chunking, embedding, ChromaDB storage
 │       ├── retriever.py        # Semantic retrieval from ChromaDB
 │       ├── prompt_builder.py   # Prompt construction from lead data + mappings
 │       ├── email_generator.py  # Groq API call, failsafe parser
-│       ├── mappings.py         # Segment/haul/amenity narrative maps, IATA resolver
+│       ├── mappings.py         # Segment/haul/amenity narrative maps
 │       └── feedback.py         # Feedback logging, SFT/DPO export, contradiction detection
 ├── app/
-│   ├── main.py                 # FastAPI app, lifespan, batch inference endpoint
-│   └── schemas.py              # Pydantic request/response models
+│   ├── main.py                 # FastAPI app, lifespan, all endpoints
+│   ├── schemas.py              # Pydantic request/response models
+│   └── state.py                # MLState singleton: engine, RAG components
 ├── frontend/
 │   └── streamlit_app.py        # 4-tab Streamlit dashboard
 ├── tests/
-│   ├── verify_performance.py   # ONNX model verification against test split
-│   └── test_api.py             # FastAPI endpoint tests
+│   ├── conftest.py             # Shared fixtures and mocks
+│   ├── test_api.py             # FastAPI endpoint tests
+│   ├── test_schemas.py         # Pydantic schema validation tests
+│   ├── test_config.py          # Configuration tests
+│   ├── test_models.py          # Model config and factory tests
+│   ├── test_preprocess.py      # Preprocessor pipeline tests
+│   ├── test_data_check.py      # Data integrity verification tests
+│   ├── test_finance.py         # Lead valuation and segmentation tests
+│   ├── test_mappings.py        # Narrative mapping tests
+│   ├── test_prompt_builder.py  # Prompt construction tests
+│   ├── test_feedback.py        # Feedback logging tests
+│   ├── test_rag_utils.py       # RAG utility function tests
+│   ├── test_inference_engine.py# Inference engine tests
+│   └── evaluate.py             # ONNX model performance verification
+├── scripts/
+│   └── benchmark.py            # Inference performance benchmark suite
+├── notebooks/
+│   ├── 01_eda.ipynb
+│   ├── 02_preprocessing.ipynb
+│   ├── 03_eda_post_clean.ipynb
+│   └── 04_modelling.ipynb
 ├── data/
 │   ├── raw/                    # customer_booking.csv
-│   ├── policies/               # BA T&C markdown/PDF documents
+│   ├── policies/               # BA T&C markdown documents
 │   ├── chroma_db/              # Persisted ChromaDB vector store
 │   └── finetuning/             # feedback_log.jsonl, sft_log.jsonl, dpo_log.jsonl
 ├── models/                     # Trained ONNX models + config JSONs
+├── hf_models/                  # Local all-MiniLM-L6-v2 model files
+├── docker/
+│   └── prod/
+│       └── deploy.Dockerfile   # Multi-stage production Dockerfile
+├── docker-compose.yml
+├── BENCHMARKS.md               # Inference latency and memory benchmarks
 ├── pyproject.toml
 └── Makefile
 ```
@@ -189,11 +235,11 @@ british_airways_booking_predictor/
 git clone https://github.com/mystic0137/BA_Lead_Engine
 cd BA_Lead_Engine
 
-# Set your Groq API key
-export GROQ_API_KEY=your_key_here
+# Set your Groq API key in .env (auto-loaded by pydantic-settings)
+echo 'GROQ_API_KEY="your_key_here"' > .env
 
 # Drop BA policy documents into data/policies/
-# (PDF or markdown — see Limitations section)
+# (markdown only — see Limitations section)
 
 # Run everything: install → ingest → train → serve
 make
@@ -202,9 +248,10 @@ make
 `make` will:
 1. Install all dependencies from `pyproject.toml`
 2. Ingest policy documents into ChromaDB
-3. Train both models and export to ONNX
-4. Start FastAPI on `http://127.0.0.1:8000`
-5. Start Streamlit on `http://127.0.0.1:8501`
+3. Verify data integrity via SHA-256 checksum
+4. Train both models and export to ONNX
+5. Start FastAPI on `http://127.0.0.1:8000`
+6. Start Streamlit on `http://127.0.0.1:8501`
 
 **Individual targets**
 
@@ -213,11 +260,38 @@ make install    # install dependencies only
 make ingest     # ingest policy documents into ChromaDB
 make train      # train models (skips if already trained)
 make retrain    # force retrain
-make verify     # run performance verification
+make benchmark     # run ONNX model performance verification
 make serve      # start FastAPI only
 make ui         # start Streamlit only
 make clean      # delete trained models
 ```
+
+**Run tests**
+
+```bash
+venv/bin/python -m pytest tests/ -v
+```
+
+**Run benchmarks**
+
+```bash
+# Requires FastAPI server running
+venv/bin/python -m scripts.benchmark
+```
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/predict/single` | Single record prediction |
+| POST | `/predict/row_oriented` | Batch prediction (list of JSON objects) |
+| POST | `/predict/column_oriented_bench` | Batch prediction (columnar JSON arrays) |
+| POST | `/predict/column_oriented` | Batch prediction (CSV file upload) |
+| GET | `/health` | Health check and model load status |
+| POST | `/api/v1/rag/generate` | Generate RAG-grounded outreach email |
+| POST | `/api/v1/rag/feedback` | Save human feedback on generated email |
 
 ---
 
@@ -234,10 +308,22 @@ The production API uses XGBoost. Both models are available for verification via 
 
 ---
 
+## Inference Benchmarks
+
+Detailed latency and memory benchmarks for all inference paths are documented in [`BENCHMARKS.md`](BENCHMARKS.md). Key findings:
+
+| Method | Latency (total) | vs Direct ONNX |
+|---|---|---|
+| Direct ONNX (in-process) | floor | 1.0x |
+| Column-oriented HTTP | ~2.7x of floor | 2.7x |
+| Row-oriented HTTP | ~5.8x of floor | 5.8x |
+
+---
+
 ## Limitations
 
 **Dataset**
-- The British Airways customer booking dataset does not contain actual ticket prices. Revenue figures are proxied using haul-tier estimates (short haul $150, medium haul $400, long haul $800) and are illustrative only — not derived from real BA pricing data.
+- The British Airways customer booking dataset does not contain actual ticket prices. Revenue figures are proxied using haul-tier estimates (short haul $150, medium haul $350, long haul $550) and are illustrative only — not derived from real BA pricing data.
 - Customer names, emails, and phone numbers in the dashboard are entirely synthetic. The dataset contains no real personal data.
 - The dataset is a static snapshot. The model has no knowledge of seasonal pricing, route availability changes, or real-time demand signals.
 
@@ -254,10 +340,12 @@ The production API uses XGBoost. Both models are available for verification via 
 ---
 
 ## Acknowledged Technical Debt
- - **Data Provenance & Drift:** Current logs reference local .md files. A production-hardened version would use Content-Addressing (SHA-256) for every retrieved chunk to ensure that fine-tuning data remains reproducible even if the underlying policy documents are updated.
- - **Stateless Inference vs. Prompt Caching:** The current pipeline resends the system prompt and policy context for every request. In a high-volume production environment, I would migrate to a provider supporting Prompt Caching (e.g., Anthropic or DeepSeek) to reduce costs by ~80%.
- - **Observability Gap:** The system lacks a dedicated telemetry layer. For a real deployment, I would integrate Prometheus/Grafana to monitor feature drift (e.g., shifting distributions in purchase_lead) and Arize/Weights & Biases for real-time model performance tracking.
- - **Concurrency Bottlenecks:** The FastAPI wrapper is async, but the ONNX Runtime calls are CPU-bound and blocking. High-scale usage would require a Worker-Queue pattern (Celery/Redis) to prevent event-loop starvation during batch scoring.
+
+- **Data Provenance & Drift:** Current logs reference local .md files. A production-hardened version would use Content-Addressing (SHA-256) for every retrieved chunk to ensure that fine-tuning data remains reproducible even if the underlying policy documents are updated.
+- **Stateless Inference vs. Prompt Caching:** The current pipeline resends the system prompt and policy context for every request. In a high-volume production environment, I would migrate to a provider supporting Prompt Caching (e.g., Anthropic or DeepSeek) to reduce costs by ~80%.
+- **Observability Gap:** The system lacks a dedicated telemetry layer. For a real deployment, I would integrate Prometheus/Grafana to monitor feature drift (e.g., shifting distributions in purchase_lead) and Arize/Weights & Biases for real-time model performance tracking.
+- **Concurrency Bottlenecks:** The FastAPI wrapper is async, but the ONNX Runtime calls are CPU-bound and blocking. High-scale usage would require a Worker-Queue pattern (Celery/Redis) to prevent event-loop starvation during batch scoring.
+- **Empty Batch Handling:** The `/predict/row_oriented` endpoint does not handle empty record lists gracefully — an empty `[]` body causes a 500 error rather than returning an empty predictions response.
 
 ---
 
@@ -265,7 +353,7 @@ The production API uses XGBoost. Both models are available for verification via 
 
 The email generator accumulates training data as sales operators review generated emails:
 
-- **`sft_log.jsonl`** — prompt/completion pairs for supervised fine-tuning. Populated when an email is accepted or edited with rating ≥ 4 and no contradictions detected.
+- **`sft_log.jsonl`** — prompt/completion pairs for supervised fine-tuning. Populated when an email is accepted or edited with no contradictions detected.
 - **`dpo_log.jsonl`** — chosen/rejected pairs for Direct Preference Optimization. Populated only when an email is edited — the original generation becomes the `rejected` completion, the human-edited version becomes `chosen`.
 
 Both files are compatible with HuggingFace `datasets` and TRL's `SFTTrainer`/`DPOTrainer` directly:
@@ -275,6 +363,57 @@ from datasets import load_dataset
 sft_data = load_dataset("json", data_files="data/finetuning/sft_log.jsonl")
 dpo_data = load_dataset("json", data_files="data/finetuning/dpo_log.jsonl")
 ```
+
+---
+
+## Changes from Previous State
+
+This section documents the significant architectural and structural changes made since the initial version of this project.
+
+**Inference Engine Restructured**
+- Extracted inference logic from `app/main.py` into a dedicated `src/inference/engine.py` module
+- `InferenceEngine` class now owns the ONNX session, config loading, and both inference paths
+- `BACostCalculator` is no longer instantiated per-request — it lives inside `InferenceEngine`
+
+**Dual Inference Paths**
+- Added **column-oriented** (vectorized) inference path alongside the original row-oriented path
+- `BACostCalculator.vectorized_calculate_lead_value` uses NumPy `np.select`/`np.vectorize` instead of per-row Python loops
+- New endpoints: `/predict/column_oriented` (CSV upload) and `/predict/column_oriented_bench` (JSON arrays)
+
+**State Management**
+- Introduced `app/state.py` with a singleton `MLState` class that lazily initializes and holds all heavy components (InferenceEngine, SentenceTransformer, ChromaDB collection, Groq client)
+- Application lifespan (`@asynccontextmanager`) handles startup initialization and shutdown cleanup
+
+**Data Integrity**
+- Added `src/data_check.py` with SHA-256 checksum verification of the raw dataset
+- Training pipeline now hard-stops if the CSV hash doesn't match `EXPECTED_DATA_HASH`
+
+**Testing Coverage**
+- Expanded from 2 test files to 14 test files covering all major modules
+- Module-level mocking of ONNX Runtime, ChromaDB, SentenceTransformer, and Groq in `tests/conftest.py`
+- 163 unit and integration tests
+
+**Performance Benchmarking**
+- Added `scripts/benchmark.py` — latency and memory benchmark comparing all four inference methods
+- Results written to `BENCHMARKS.md` with total/avg/p95/p99 latency, tracemalloc peak, and RSS delta
+
+**Containerization**
+- Added multi-stage `docker/prod/deploy.Dockerfile` (base, hf-cache, fastapi, streamlit stages)
+- Added `docker-compose.yml` for orchestrated deployment
+
+**Project Structure Additions**
+- `src/inference/` — dedicated inference engine module
+- `scripts/` — benchmark and utility scripts
+- `notebooks/` — Jupyter notebooks for EDA and modelling
+- `hf_models/` — local embedding model (all-MiniLM-L6-v2)
+- `tests/conftest.py` — centralized test fixtures and mocks
+- `BENCHMARKS.md` — inference performance documentation
+
+**Endpoint Changes**
+- `/predict` → split into `/predict/single` and `/predict/row_oriented`
+- Added `/predict/column_oriented` (CSV upload) and `/predict/column_oriented_bench`
+- Added `/api/v1/rag/generate` and `/api/v1/rag/feedback`
+- Added `/health` endpoint
 
 ---
 
