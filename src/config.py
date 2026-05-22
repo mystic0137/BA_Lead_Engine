@@ -47,6 +47,8 @@ RF_CONFIG_PATH = MODELS_DIR / "random_forest_config.json"
 DEFAULT_THRESHOLD = 0.3090
 ONNX_OPSET: dict[str, int] = {"": 17, "ai.onnx.ml": 3}
 
+EMBEDDING_MODEL = ROOT_DIR / "hf_models/all-MiniLM-L6-v2"
+
 SYSTEM_PROMPTS: dict[str, str] = {
     "ba_copywriter_v1": (
         "You are an elegant and observant brand copywriter for British Airways. "
