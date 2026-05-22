@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from app.schemas import RoworientedInput, ColumnorientedInput
 from src.inference.engine import InferenceEngine, load_config
+from src.inference.csv_utils import csv_to_column_oriented
 
 
 class TestLoadConfig:
@@ -36,7 +37,6 @@ class TestInferenceEngineInit:
 
 class TestCsvToColumnOriented:
     def test_parses_csv(self):
-        engine = InferenceEngine()
         csv_content = (
             "num_passengers,purchase_lead,length_of_stay,flight_hour,flight_duration,"
             "wants_extra_baggage,wants_preferred_seat,wants_in_flight_meals,"
@@ -44,18 +44,17 @@ class TestCsvToColumnOriented:
             "2,10,7,14,8.5,1,0,1,Internet,RoundTrip,Sat,AKLHND,Australia\n"
             "1,5,3,10,5.0,0,1,0,Mobile,OneWay,Mon,LHRJFK,UK\n"
         )
-        result = engine.csv_to_column_oriented(io.BytesIO(csv_content.encode("latin1")))
+        result = csv_to_column_oriented(io.BytesIO(csv_content.encode("latin1")))
         assert len(result.num_passengers) == 2
         assert result.sales_channel == ["Internet", "Mobile"]
 
     def test_empty_csv(self):
-        engine = InferenceEngine()
         csv_content = (
             "num_passengers,purchase_lead,length_of_stay,flight_hour,flight_duration,"
             "wants_extra_baggage,wants_preferred_seat,wants_in_flight_meals,"
             "sales_channel,trip_type,flight_day,route,booking_origin\n"
         )
-        result = engine.csv_to_column_oriented(io.BytesIO(csv_content.encode("latin1")))
+        result = csv_to_column_oriented(io.BytesIO(csv_content.encode("latin1")))
         assert len(result.num_passengers) == 0
 
 
