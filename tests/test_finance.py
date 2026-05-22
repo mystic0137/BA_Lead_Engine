@@ -2,9 +2,9 @@ import json
 import numpy as np
 from pathlib import Path
 from src.analytics.finance import (
-    _base_flight_value, _vectorized_base_flight_value,
-    _calculate_potential_revenue, _vectorized_calculate_potential_revenue,
-    _lead_value_tier, _vectorized_lead_value_tier,
+    _base_flight_value,
+    _calculate_potential_revenue,
+    _lead_value_tier,
     BACostCalculator,
 )
 
@@ -23,21 +23,21 @@ class TestBaseFlightValue:
         assert _base_flight_value(24.0) == 550.0
 
 
-class TestVectorizedBaseFlightValue:
+class TestBaseFlightValueVectorized:
     def test_short_haul(self):
-        result = _vectorized_base_flight_value(np.array([2.9, 0.0]))
+        result = _base_flight_value(np.array([2.9, 0.0]))
         assert np.all(result == 150.0)
 
     def test_medium_haul(self):
-        result = _vectorized_base_flight_value(np.array([3.0, 6.0]))
+        result = _base_flight_value(np.array([3.0, 6.0]))
         assert np.all(result == 350.0)
 
     def test_long_haul(self):
-        result = _vectorized_base_flight_value(np.array([6.1, 24.0]))
+        result = _base_flight_value(np.array([6.1, 24.0]))
         assert np.all(result == 550.0)
 
     def test_mixed(self):
-        result = _vectorized_base_flight_value(np.array([1.0, 4.0, 10.0]))
+        result = _base_flight_value(np.array([1.0, 4.0, 10.0]))
         assert np.all(result == [150.0, 350.0, 550.0])
 
 
@@ -82,7 +82,7 @@ class TestCalculatePotentialRevenue:
         assert rev == 150.0
 
 
-class TestVectorizedCalculatePotentialRevenue:
+class TestCalculatePotentialRevenueVectorized:
     def test_basic(self):
         data = {
             "flight_duration": np.array([8.0]),
@@ -91,7 +91,7 @@ class TestVectorizedCalculatePotentialRevenue:
             "wants_preferred_seat": np.array([0]),
             "wants_in_flight_meals": np.array([0]),
         }
-        rev = _vectorized_calculate_potential_revenue(data)
+        rev = _calculate_potential_revenue(data)
         assert rev[0] == 550.0
 
     def test_multi_row(self):
@@ -102,7 +102,7 @@ class TestVectorizedCalculatePotentialRevenue:
             "wants_preferred_seat": np.array([0, 1]),
             "wants_in_flight_meals": np.array([0, 1]),
         }
-        rev = _vectorized_calculate_potential_revenue(data)
+        rev = _calculate_potential_revenue(data)
         assert rev[0] == 150.0
         expected = (550.0 + 50.0 + 40.0 + 20.0) * 2
         assert rev[1] == expected
@@ -122,10 +122,10 @@ class TestLeadValueTier:
         assert _lead_value_tier(799.99) == 2
 
 
-class TestVectorizedLeadValueTier:
+class TestLeadValueTierVectorized:
     def test_mixed(self):
         rev = np.array([500.0, 1000.0, 3000.0])
-        tiers = _vectorized_lead_value_tier(rev)
+        tiers = _lead_value_tier(rev)
         assert np.all(tiers == [2, 3, 4])
 
 
@@ -205,7 +205,7 @@ class TestBACostCalculator:
             "wants_in_flight_meals": np.array([1, 1, 0, 0]),
         }
         probs = np.array([0.90, 0.50, 0.90, 0.20])
-        result = calc.vectorized_calculate_lead_value(probs, data)
+        result = calc.calculate_lead_value(probs, data)
         assert len(result["priority_score"]) == 4
         assert result["priority_score"][0] == 2
         assert result["priority_score"][3] == 0
