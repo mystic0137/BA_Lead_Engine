@@ -3,7 +3,7 @@ from src.config import (
     EXPORT_FIELDS, ROOT_DIR, DATA_DIR, MODELS_DIR,
     RAW_DATA, CHROMA_DB_PATH, POLICIES_DIR, FINETUNING_DIR,
     TARGET_ENCODE_COLS, OHE_COLS, NUMERIC_COLS, ALL_FEATURE_COLS,
-    XGBOOST_ONNX_PATH, XGBOOST_CONFIG_PATH, RF_ONNX_PATH, RF_CONFIG_PATH,
+    XGBOOST_ONNX_PATH, XGBOOST_CONFIG_PATH,
     DEFAULT_THRESHOLD, ONNX_OPSET, EMBEDDING_MODEL,
     SYSTEM_PROMPTS, ACTIVE_SYSTEM_PROMPT_ID, init_dirs,
 )
@@ -64,8 +64,6 @@ def test_all_feature_cols_is_union():
 def test_model_paths():
     assert XGBOOST_ONNX_PATH == MODELS_DIR / "xgboost.onnx"
     assert XGBOOST_CONFIG_PATH == MODELS_DIR / "xgboost_config.json"
-    assert RF_ONNX_PATH == MODELS_DIR / "random_forest.onnx"
-    assert RF_CONFIG_PATH == MODELS_DIR / "random_forest_config.json"
 
 
 def test_default_threshold():
