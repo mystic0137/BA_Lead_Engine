@@ -2,9 +2,12 @@ import json
 import uuid
 import random
 import urllib.parse
+import io
+import os
 from datetime import datetime
 
 import numpy as np
+import logging
 import pandas as pd
 import requests
 import streamlit as st
@@ -12,15 +15,14 @@ import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 
-from src.config import EXPORT_FIELDS
-from src.rag.email_generator import generate_email
-from src.rag.feedback import save_feedback, load_feedback, FEEDBACK_LOG
+from config import EXPORT_FIELDS
 
 st.set_page_config(page_title="BA Lead Prioritization Engine", layout="wide")
 st.title("British Airways — Lead Prioritization Engine")
 
-API_URL = "http://127.0.0.1:8000"
-BATCH_SIZE = 15000
+logger = logging.getLogger(__name__)
+
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 REQUIRED_COLUMNS = [
     "num_passengers", "sales_channel", "trip_type", "purchase_lead",
@@ -36,12 +38,14 @@ FAKE_NAMES = [
     "David Okafor", "Yuki Tanaka", "Maria Costa", "Ahmed Hassan",
 ]
 
-SEGMENT_COLORS = {
-    "The VIP": "#2ecc71",
-    "The Persuadable": "#e74c3c",
-    "The Window Shopper": "#f39c12",
-    "The Lost Cause": "#95a5a6",
+PRIORITY_META = {
+    3: ("The Persuadable", "Schedule Call", "#e74c3c"),
+    2: ("The VIP",         "Send Email",    "#2ecc71"),
+    1: ("The Window Shopper", "Drip Sequence", "#f39c12"),
+    0: ("The Lost Cause",  "No Action",     "#95a5a6"),
 }
+
+SEGMENT_COLORS = {v[0]: v[2] for v in PRIORITY_META.values()}
 
 
 def generate_fake_contact(name: str) -> dict:
@@ -66,57 +70,53 @@ def _haul_type(duration: float) -> str:
     return "Long Haul"
 
 
-def score_batch(records: list[dict]) -> list[dict] | None:
+def score_csv(file) -> dict | None:
     try:
         r = requests.post(
-            f"{API_URL}/predict/batch",
-            json=records,
+            f"{API_URL}/predict/column_oriented",
+            files={"file": (file.name, file.getvalue(), "text/csv")},
             timeout=120,
         )
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        st.error(f"Batch request failed: {e}")
+        st.error(f"Scoring request failed: {e}")
         return None
 
 
-def build_payload(row: pd.Series) -> dict:
-    record = {col: row[col] for col in REQUIRED_COLUMNS}
-    for col in ["wants_extra_baggage", "wants_preferred_seat", "wants_in_flight_meals"]:
-        record[col] = int(record[col])
-    return record
+def build_results(df: pd.DataFrame, response: dict) -> pd.DataFrame:
+    pred = response["predictions"]
+    biz  = pred["business_logic"]
 
-
-def build_results(df: pd.DataFrame, responses: list[dict]) -> pd.DataFrame:
     rows = []
-    for i, response in enumerate(responses):
-        biz = response["business_logic"]
-        name = FAKE_NAMES[i % len(FAKE_NAMES)]
+    for i in range(len(pred["probability"])):
+        priority = int(biz["priority_score"][i])
+        segment, action, _ = PRIORITY_META[priority]
+        name    = FAKE_NAMES[i % len(FAKE_NAMES)]
         contact = generate_fake_contact(name)
-        row = df.iloc[i]
+        row     = df.iloc[i]
         rows.append({
-            "customer_id": str(uuid.uuid4())[:8].upper(),
-            "customer_name": name,
-            "email": contact["email"],
-            "phone": contact["phone"],
-            "route": row["route"],
-            "booking_origin": row["booking_origin"],
-            "haul_type": _haul_type(row["flight_duration"]),
-            "num_passengers": row["num_passengers"],
-            "wants_extra_baggage": bool(row["wants_extra_baggage"]),
+            "customer_id":          str(uuid.uuid4())[:8].upper(),
+            "customer_name":        name,
+            "email":                contact["email"],
+            "phone":                contact["phone"],
+            "route":                row["route"],
+            "booking_origin":       row["booking_origin"],
+            "haul_type":            _haul_type(row["flight_duration"]),
+            "num_passengers":       row["num_passengers"],
+            "wants_extra_baggage":  bool(row["wants_extra_baggage"]),
             "wants_preferred_seat": bool(row["wants_preferred_seat"]),
-            "wants_in_flight_meals": bool(row["wants_in_flight_meals"]),
-            "booking_probability": response["probability"],
-            "booking_prediction": response["booking_prediction"],
-            "segment": biz["segment"],
-            "category": biz["category"],
-            "value_tier": biz["value_tier"],
-            "recommended_action": biz["recommended_action"],
-            "priority_score": biz["priority_score"],
-            "expected_value_usd": biz["expected_value_usd"],
-            "potential_revenue_usd": biz["potential_revenue_usd"],
-            "marginal_profit_usd": biz["marginal_profit_usd"],
-            "scored_at": datetime.utcnow().isoformat(),
+            "wants_in_flight_meals":bool(row["wants_in_flight_meals"]),
+            "booking_probability":  pred["probability"][i],
+            "booking_prediction":   pred["booking_prediction"][i],
+            "priority_score":       priority,
+            "value_tier":           biz["value_tier"][i],
+            "expected_value_usd":   biz["expected_value_usd"][i],
+            "potential_revenue_usd":biz["potential_revenue_usd"][i],
+            "marginal_profit_usd":  biz["marginal_profit_usd"][i],
+            "segment":              segment,
+            "recommended_action":   action,
+            "scored_at":            datetime.utcnow().isoformat(),
         })
     return pd.DataFrame(rows).sort_values("priority_score", ascending=False)
 
@@ -145,7 +145,7 @@ with tab1:
             st.stop()
 
         st.write(f"**{len(df)} records loaded.** Preview:")
-        st.dataframe(df.head(5), use_container_width=True)
+        st.dataframe(df.head(5), width='stretch')
 
         sample_pct = st.slider(
             "Score a random sample (%)", 10, 100, 100, step=10,
@@ -156,66 +156,53 @@ with tab1:
             st.info(f"Scoring {len(df)} records ({sample_pct}% sample)")
 
         if st.button("Score All Leads", type="primary"):
-            all_responses: list[dict] = []
-            num_batches = (len(df) + BATCH_SIZE - 1) // BATCH_SIZE
-            progress = st.progress(0, text="Scoring leads...")
+            csv_buffer = io.BytesIO(df.to_csv(index=False).encode())
+            csv_buffer.name = uploaded.name
 
-            for batch_idx in range(num_batches):
-                batch_df = df.iloc[batch_idx * BATCH_SIZE:(batch_idx + 1) * BATCH_SIZE]
-                payload = [build_payload(row) for _, row in batch_df.iterrows()]
+            with st.spinner("Scoring leads..."):
+                response = score_csv(csv_buffer)
 
-                responses = score_batch(payload)
-                if responses is None:
-                    st.stop()
+            if response is None:
+                st.stop()
 
-                all_responses.extend(responses)
-                progress.progress(
-                    (batch_idx + 1) / num_batches,
-                    text=f"Batch {batch_idx + 1}/{num_batches} complete"
-                )
-
-            progress.empty()
-            results_df = build_results(df, all_responses)
+            results_df = build_results(df, response)
             st.session_state["results_df"] = results_df
+            st.session_state["score_meta"] = response["meta"]
             st.success(f"Scored {len(results_df)} leads successfully.")
 
         if "results_df" in st.session_state:
             results_df = st.session_state["results_df"]
+            meta       = st.session_state["score_meta"]
 
             st.divider()
             st.subheader("Segment Summary")
 
-            c0, c1, c2, c3 = st.columns(4)
             seg_counts = results_df["segment"].value_counts()
-            c0.metric("🔴 The Persuadable", seg_counts.get("The Persuadable", 0))
-            c1.metric("🟢 The VIP", seg_counts.get("The VIP", 0))
-            c2.metric("🟡 Window Shopper", seg_counts.get("The Window Shopper", 0))
-            c3.metric("⚫ Lost Cause", seg_counts.get("The Lost Cause", 0))
+            c0, c1, c2, c3 = st.columns(4)
+            c0.metric("🔴 The Persuadable",  seg_counts.get("The Persuadable", 0))
+            c1.metric("🟢 The VIP",          seg_counts.get("The VIP", 0))
+            c2.metric("🟡 Window Shopper",   seg_counts.get("The Window Shopper", 0))
+            c3.metric("⚫ Lost Cause",        seg_counts.get("The Lost Cause", 0))
 
-            actionable = results_df[results_df["segment"].isin(["The Persuadable", "The VIP"])]
+            actionable     = results_df[results_df["priority_score"] >= 2]
             marketing_spend = (
                 actionable["expected_value_usd"] - actionable["marginal_profit_usd"]
             ).sum()
 
             e1, e2, e3, e4 = st.columns(4)
-            e1.metric(
-                "Actionable Leads",
-                f"{len(actionable):,}",
-                help="Persuadables + VIPs worth contacting"
-            )
-            e2.metric(
-                "Expected Revenue (Actionable)",
-                f"${actionable['expected_value_usd'].sum():,.0f}",
-                help="Probability-weighted revenue from leads worth contacting"
-            )
-            e3.metric(
-                "Avg Probability (Persuadable)",
-                f"{results_df[results_df['segment'] == 'The Persuadable']['booking_probability'].mean():.1%}",
-            )
-            e4.metric(
-                "Total Marketing Spend",
-                f"${marketing_spend:,.0f}",
-                help="Cost to action all Persuadable + VIP leads"
+            e1.metric("Actionable Leads", f"{len(actionable):,}",
+                      help="Persuadables + VIPs worth contacting")
+            e2.metric("Expected Revenue (Actionable)",
+                      f"${actionable['expected_value_usd'].sum():,.0f}",
+                      help="Probability-weighted revenue from leads worth contacting")
+            e3.metric("Avg Probability (Persuadable)",
+                      f"{results_df[results_df['priority_score'] == 3]['booking_probability'].mean():.1%}")
+            e4.metric("Total Marketing Spend", f"${marketing_spend:,.0f}",
+                      help="Cost to action all Persuadable + VIP leads")
+
+            st.caption(
+                f"Model: `{meta['model_version']}` — "
+                f"Threshold: `{meta['threshold_used']}`"
             )
 
             fig_pie = px.pie(
@@ -226,17 +213,17 @@ with tab1:
                 title="Lead Segment Distribution",
                 hole=0.4,
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width='stretch')
 
             st.divider()
             st.subheader("All Scored Leads")
             st.dataframe(
                 results_df[[
                     "customer_name", "route", "segment", "value_tier",
-                    "booking_probability", "category", "recommended_action",
+                    "booking_probability", "recommended_action",
                     "potential_revenue_usd", "marginal_profit_usd", "priority_score",
                 ]],
-                use_container_width=True,
+                width='stretch',
             )
 
 # ── TAB 2: Lead Queue ─────────────────────────────────────────────────────────
@@ -294,7 +281,7 @@ with tab2:
                 "segment": "Segment",
             },
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
 
         st.dataframe(
             queue_df[[
@@ -303,7 +290,7 @@ with tab2:
                 "booking_probability", "recommended_action",
                 "potential_revenue_usd", "marginal_profit_usd",
             ]],
-            use_container_width=True,
+            width='stretch',
         )
 
         st.divider()
@@ -353,49 +340,40 @@ with tab3:
         )
 
         y_true = eval_df["booking_complete"].values
-        X_eval = eval_df.drop(columns=["booking_complete"])
 
         if st.button("Run Evaluation", type="primary"):
-            all_probs: list[float] = []
-            num_batches = (len(X_eval) + BATCH_SIZE - 1) // BATCH_SIZE
-            progress = st.progress(0, text="Evaluating...")
+            eval_file.seek(0)
+            with st.spinner("Evaluating..."):
+                response = score_csv(eval_file)
 
-            for batch_idx in range(num_batches):
-                batch_df = X_eval.iloc[batch_idx * BATCH_SIZE:(batch_idx + 1) * BATCH_SIZE]
-                payload = [build_payload(row) for _, row in batch_df.iterrows()]
+            if response is None:
+                st.stop()
 
-                responses = score_batch(payload)
-                if responses is None:
-                    st.stop()
-
-                all_probs.extend([r["probability"] for r in responses])
-                progress.progress((batch_idx + 1) / num_batches)
-
-            progress.empty()
-            st.session_state["eval_probs"] = np.array(all_probs)
+            probs = np.array(response["predictions"]["probability"])
+            st.session_state["eval_probs"]  = probs
             st.session_state["eval_y_true"] = y_true
 
         if "eval_probs" in st.session_state:
-            probs_arr = st.session_state["eval_probs"]
-            y_true_arr = st.session_state["eval_y_true"]
-            preds = (probs_arr >= threshold).astype(int)
+            probs_arr   = st.session_state["eval_probs"]
+            y_true_arr  = st.session_state["eval_y_true"]
+            preds       = (probs_arr >= threshold).astype(int)
 
-            cm = confusion_matrix(y_true_arr, preds)
-            tn, fp, fn, tp = cm.ravel()
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-            f1 = (
+            cm                  = confusion_matrix(y_true_arr, preds)
+            tn, fp, fn, tp      = cm.ravel()
+            precision           = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall              = tp / (tp + fn) if (tp + fn) > 0 else 0
+            f1                  = (
                 2 * precision * recall / (precision + recall)
                 if (precision + recall) > 0 else 0
             )
             fpr_arr, tpr_arr, _ = roc_curve(y_true_arr, probs_arr)
-            roc_auc = auc(fpr_arr, tpr_arr)
+            roc_auc             = auc(fpr_arr, tpr_arr)
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("ROC-AUC", f"{roc_auc:.4f}")
+            m1.metric("ROC-AUC",   f"{roc_auc:.4f}")
             m2.metric("Precision", f"{precision:.4f}")
-            m3.metric("Recall", f"{recall:.4f}")
-            m4.metric("F1", f"{f1:.4f}")
+            m3.metric("Recall",    f"{recall:.4f}")
+            m4.metric("F1",        f"{f1:.4f}")
 
             col_cm, col_roc = st.columns(2)
 
@@ -410,7 +388,7 @@ with tab3:
                     showscale=False,
                 ))
                 fig_cm.update_layout(title=f"Confusion Matrix (threshold={threshold:.3f})")
-                st.plotly_chart(fig_cm, use_container_width=True)
+                st.plotly_chart(fig_cm, width='stretch')
 
             with col_roc:
                 fig_roc = go.Figure()
@@ -431,7 +409,7 @@ with tab3:
                     xaxis_title="False Positive Rate",
                     yaxis_title="True Positive Rate",
                 )
-                st.plotly_chart(fig_roc, use_container_width=True)
+                st.plotly_chart(fig_roc, width='stretch')
 
             fig_dist = go.Figure()
             for label, color, name in [
@@ -457,7 +435,7 @@ with tab3:
                 yaxis_title="Count",
                 barmode="overlay",
             )
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.plotly_chart(fig_dist, width='stretch')
 
 # ── TAB 4: Email Generator ────────────────────────────────────────────────────
 with tab4:
@@ -473,7 +451,7 @@ with tab4:
         results_df = st.session_state["results_df"]
 
         nudge_leads = results_df[
-            (results_df["segment"] == "The VIP") &
+            (results_df["priority_score"] == 2) &
             (results_df["value_tier"] == "High")
         ]
 
@@ -493,7 +471,7 @@ with tab4:
                     "wants_extra_baggage", "wants_preferred_seat",
                     "wants_in_flight_meals",
                 ]],
-                use_container_width=True,
+                width='stretch',
             )
 
             st.divider()
@@ -505,12 +483,32 @@ with tab4:
                 for i, (_, lead) in enumerate(sample.iterrows()):
                     with st.spinner(f"Generating email for {lead['customer_name']}..."):
                         try:
-                            result = generate_email(lead.to_dict())
+                            lead_dict = lead.to_dict()
+                            payload = {
+                                "customer_id": lead_dict["customer_id"],
+                                "customer_name": lead_dict["customer_name"],
+                                "email": lead_dict["email"],
+                                "route": lead_dict["route"],
+                                "booking_origin": lead_dict["booking_origin"],
+                                "haul_type": lead_dict["haul_type"],
+                                "num_passengers": int(lead_dict["num_passengers"]),
+                                "wants_extra_baggage": bool(lead_dict["wants_extra_baggage"]),
+                                "wants_preferred_seat": bool(lead_dict["wants_preferred_seat"]),
+                                "wants_in_flight_meals": bool(lead_dict["wants_in_flight_meals"]),
+                            }
+                            r = requests.post(
+                                f"{API_URL}/api/v1/rag/generate",
+                                json=payload,
+                                timeout=60,
+                            )
+                            r.raise_for_status()
+                            result = r.json()
                             st.session_state["generated_emails"].append({
-                                "lead": lead.to_dict(),
+                                "lead":  lead_dict,
                                 "email": result,
                             })
                         except Exception as e:
+                            logger.exception(e)
                             st.error(f"Failed for {lead['customer_name']}: {e}")
                             continue
 
@@ -520,18 +518,16 @@ with tab4:
                     )
 
                 progress.empty()
-                st.success(
-                    f"Generated {len(st.session_state['generated_emails'])} emails."
-                )
+                st.success(f"Generated {len(st.session_state['generated_emails'])} emails.")
 
         if "generated_emails" in st.session_state and st.session_state["generated_emails"]:
             st.divider()
             st.subheader("Generated Emails")
 
             for item in st.session_state["generated_emails"]:
-                lead = item["lead"]
+                lead  = item["lead"]
                 email = item["email"]
-                cid = lead["customer_id"]
+                cid   = lead["customer_id"]
 
                 with st.expander(
                     f"📧 {lead['customer_name']} — {lead['route']} ({lead['haul_type']})",
@@ -548,18 +544,13 @@ with tab4:
                     st.divider()
 
                     edited_subject = st.text_input(
-                        "Subject",
-                        value=email["subject"],
-                        key=f"subject_{cid}",
+                        "Subject", value=email["subject"], key=f"subject_{cid}"
                     )
                     edited_body = st.text_area(
-                        "Email Body",
-                        value=email["body"],
-                        height=220,
-                        key=f"body_{cid}",
+                        "Email Body", value=email["body"], height=220, key=f"body_{cid}"
                     )
 
-                    rating = st.feedback("stars", key=f"rating_{cid}")
+                    rating       = st.feedback("stars", key=f"rating_{cid}")
                     rating_value = (rating + 1) if rating is not None else 3
 
                     choice_key = f"choice_{cid}"
@@ -581,7 +572,6 @@ with tab4:
                             st.rerun()
 
                     current_choice = st.session_state[choice_key]
-
                     if current_choice == "accepted":
                         st.success("Current Selection: Accepted ✓")
                     elif current_choice == "rejected":
@@ -589,29 +579,44 @@ with tab4:
 
                     with col_save:
                         if st.button("💾 Save Feedback", key=f"save_{cid}"):
-                            choice = st.session_state.get(choice_key)
+                            choice   = st.session_state.get(choice_key)
                             accepted = choice == "accepted" if choice is not None else None
-
-                            save_feedback(
-                                lead={
-                                    **lead,
-                                    "retrieved_sources": email["retrieved_sources"],
-                                },
-                                system_prompt_id=email.get(
-                                    "system_prompt_id", "ba_copywriter_v1"
-                                ),
-                                generated_subject=email["subject"],
-                                generated_body=email["body"],
-                                edited_subject=edited_subject,
-                                edited_body=edited_body,
-                                rating=rating_value,
-                                accepted=accepted,
-                                tokens_input=email.get("tokens_input", 0),
-                                tokens_output=email.get("tokens_output", 0),
-                                latency_ms=email.get("latency_ms", 0),
-                            )
-                            st.session_state[choice_key] = None
-                            st.success("Saved to feedback log.")
+                            
+                            feedback_payload = {
+                                "customer_id": lead.get("customer_id", cid),
+                                "customer_name": lead.get("customer_name"),
+                                "email": lead.get("email"),
+                                "route": lead.get("route"),
+                                "booking_origin": lead.get("booking_origin"),
+                                "haul_type": lead.get("haul_type"),
+                                "num_passengers": lead.get("num_passengers"),
+                                "wants_extra_baggage": lead.get("wants_extra_baggage"),
+                                "wants_preferred_seat": lead.get("wants_preferred_seat"),
+                                "wants_in_flight_meals": lead.get("wants_in_flight_meals"),
+                                "retrieved_sources": email["retrieved_sources"],
+                                "system_prompt_id": email.get("system_prompt_id", "ba_copywriter_v1"),
+                                "generated_subject": email["subject"],
+                                "generated_body": email["body"],
+                                "edited_subject": edited_subject,
+                                "edited_body": edited_body,
+                                "rating": rating_value,
+                                "accepted": accepted,
+                                "tokens_input": email.get("tokens_input", 0),
+                                "tokens_output": email.get("tokens_output", 0),
+                                "latency_ms": email.get("latency_ms", 0),
+                            }
+                            
+                            try:
+                                r = requests.post(
+                                    f"{API_URL}/api/v1/rag/feedback",
+                                    json=feedback_payload,
+                                    timeout=10,
+                                )
+                                r.raise_for_status()
+                                st.session_state[choice_key] = None
+                                st.success("Saved to feedback log.")
+                            except Exception as e:
+                                st.error(f"Failed to save feedback: {e}")
 
                     with col_draft:
                         mailto = (
