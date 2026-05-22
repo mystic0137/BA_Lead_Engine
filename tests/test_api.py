@@ -115,7 +115,7 @@ class TestPredictRowOriented:
 
     def test_empty_batch(self, client):
         response = client.post("/predict/row_oriented", json=[])
-        assert response.status_code == 500
+        assert response.status_code == 400
 
     def test_invalid_record_in_batch(self, client, valid_payload):
         records = [valid_payload, {**valid_payload, "flight_hour": 99}]
@@ -167,7 +167,7 @@ class TestPredictColumnOriented:
             "/predict/column_oriented",
             files={"file": ("test.txt", "not csv", "text/plain")},
         )
-        assert response.status_code == 500
+        assert response.status_code == 422
 
 
 class TestRAGGenerate:
@@ -206,6 +206,8 @@ class TestRAGFeedback:
         base = {
             "customer_id": "CUST001",
             "customer_name": "John Doe",
+            "email": "john.doe@example.com",
+            "route": "SYD-LHR",
             "booking_origin": "Australia",
             "haul_type": "Long Haul",
             "num_passengers": 2,
@@ -220,6 +222,9 @@ class TestRAGFeedback:
             "edited_body": "Original body text here",
             "rating": 5,
             "accepted": True,
+            "tokens_input": 1200,
+            "tokens_output": 240,
+            "latency_ms": 850,
         }
         base.update(overrides)
         return base
