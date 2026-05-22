@@ -13,26 +13,24 @@ env/
 .env
 .python-version
 
-# dont exclude whole dirs
-!data/
-!data/chroma_db/
-!data/finetuning/
-!models/
-
-hf_models/
-
 # Data and Artifacts (The "Heavy" Stuff)
 data/chroma_db/*
 data/finetuning/*
 
-# Models and Pickles
+# Models (ONNX artifacts, configs)
 models/*
 
-# But keep gitkeep
+# LRU: keep structure
 !data/chroma_db/.gitkeep
 !data/finetuning/.gitkeep
 !models/.gitkeep
+
+# HF model cache (downloaded at build time)
+hf_models/*
 !hf_models/.gitkeep
+
+# uv lock file (project uses pip/requirements.txt for dep management)
+uv.lock
 
 # notebook cache
 .ipynb_checkpoints
