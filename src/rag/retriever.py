@@ -6,7 +6,7 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 from src.config import CHROMA_DB_PATH
-from src.rag.ingest import EMBEDDING_MODEL
+from src.config import EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ TOP_K = 3
 
 @lru_cache(maxsize=1)
 def _get_model() -> SentenceTransformer:
-    return SentenceTransformer(EMBEDDING_MODEL)
+    return SentenceTransformer(str(EMBEDDING_MODEL))
 
 
 @lru_cache(maxsize=1)
