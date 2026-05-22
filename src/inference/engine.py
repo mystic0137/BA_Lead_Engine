@@ -1,25 +1,28 @@
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import onnxruntime as rt
 import pandas as pd
 import numpy as np
 import json
-from typing import BinaryIO
 
 from app.schemas import RoworientedInput, ColumnorientedInput, PredictionRoworiented, PredictionColumnoriented
 from src.config import XGBOOST_ONNX_PATH, XGBOOST_CONFIG_PATH
 from src.analytics.finance import BACostCalculator
 
 
-#Helper
 def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return json.load(f)
 
 logger = logging.getLogger(__name__)
 
+_INFERENCE_TIMEOUT = 30
+_inference_executor = ThreadPoolExecutor(max_workers=1)
+
 class InferenceEngine:
     def __init__(self):
-        
+        self._lock = threading.Lock()
         self._session = rt.InferenceSession(
             str(XGBOOST_ONNX_PATH),
             providers=["CPUExecutionProvider"]
@@ -31,21 +34,18 @@ class InferenceEngine:
         self._all_features = [inp.name for inp in self._session.get_inputs()]
         self._numeric_features = [inp.name for inp in self._session.get_inputs() if "string" not in inp.type]
     
-    @staticmethod
-    def csv_to_column_oriented(file_stream: BinaryIO) -> ColumnorientedInput:
-
-        df = pd.read_csv(file_stream, encoding="latin1")
-
-        records = df.to_dict(orient="list")
-
-        return ColumnorientedInput(
-            **records
-        )
-    
     def _run_core(self, onnx_inputs: dict) -> np.ndarray:
 
+        def _run():
+            with self._lock:
+                return self._session.run(None, onnx_inputs)
+
         try:
-            output = self._session.run(None, onnx_inputs)
+            future = _inference_executor.submit(_run)
+            output = future.result(timeout=_INFERENCE_TIMEOUT)
+        except TimeoutError:
+            logger.error("ONNX inference timed out after %ds", _INFERENCE_TIMEOUT)
+            raise RuntimeError(f"ONNX inference timed out after {_INFERENCE_TIMEOUT}s")
         except Exception:
             logger.exception("ONNX session.run failed")
             raise
@@ -109,15 +109,12 @@ class InferenceEngine:
             probs > threshold
         ).astype(np.int8)
         
-        valuation = calculator.vectorized_calculate_lead_value(probs, onnx_inputs)
+        valuation = calculator.calculate_lead_value(probs, onnx_inputs)
         
         results = {
             "probability": np.round(probs, 4).flatten().tolist(),
             "booking_prediction": classes.flatten().tolist(),
-            "business_logic": {
-                key: valuation[key].flatten().tolist()
-                for key in valuation
-            }
+            "business_logic": valuation,
         }
         
         final = {
