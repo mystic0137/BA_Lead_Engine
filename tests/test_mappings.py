@@ -1,6 +1,10 @@
-from src.rag.mappings import (
-    SEGMENT_MAP, HAUL_HOOK_MAP, PARTY_SIZE_MAP, AMENITY_DESCRIPTIONS,
-    get_party_description, get_amenity_hooks,
+from src.rag.prompts import (
+    SEGMENT_MAP,
+    HAUL_HOOK_MAP,
+    PARTY_SIZE_MAP,
+    AMENITY_DESCRIPTIONS,
+    get_party_description,
+    get_amenity_hooks,
 )
 
 
@@ -11,7 +15,7 @@ class TestConstants:
         }
 
     def test_haul_hook_map_keys(self):
-        assert set(HAUL_HOOK_MAP.keys()) == {"Short Haul", "Long Haul"}
+        assert set(HAUL_HOOK_MAP.keys()) == {"Short Haul", "Medium Haul", "Long Haul"}
 
     def test_party_size_map_keys(self):
         assert 1 in PARTY_SIZE_MAP
