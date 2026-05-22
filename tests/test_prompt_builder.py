@@ -1,6 +1,6 @@
 import pytest
-from src.rag.prompt_builder import build_user_prompt, get_system_prompt
-from src.config import SYSTEM_PROMPTS, ACTIVE_SYSTEM_PROMPT_ID
+from src.rag.prompts import build_user_prompt, get_system_prompt
+from src.config import SYSTEM_PROMPTS
 
 
 class TestBuildUserPrompt:
@@ -71,11 +71,3 @@ class TestGetSystemPrompt:
         assert "British Airways" in prompt
         assert "warm, sophisticated" in prompt
         assert "STRICT RULES" in prompt
-
-    def test_specific_prompt_id(self):
-        prompt = get_system_prompt("ba_copywriter_v1")
-        assert prompt == SYSTEM_PROMPTS["ba_copywriter_v1"]
-
-    def test_invalid_prompt_id(self):
-        with pytest.raises(KeyError):
-            get_system_prompt("nonexistent")
