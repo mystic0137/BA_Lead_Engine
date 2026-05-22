@@ -7,11 +7,10 @@ from chromadb.config import Settings
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
-from src.config import CHROMA_DB_PATH, POLICIES_DIR
+from src.config import CHROMA_DB_PATH, POLICIES_DIR, EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 
@@ -80,7 +79,7 @@ def ingest(force: bool = False) -> None:
 
     logger.info("Found %d policy documents", len(policy_files))
 
-    model = SentenceTransformer(EMBEDDING_MODEL)
+    model = SentenceTransformer(str(EMBEDDING_MODEL))
     collection = build_vectorstore()
 
     existing = set(collection.get()["ids"])
