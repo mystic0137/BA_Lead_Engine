@@ -41,12 +41,11 @@ ALL_FEATURE_COLS = TARGET_ENCODE_COLS + OHE_COLS + NUMERIC_COLS
 
 XGBOOST_ONNX_PATH = MODELS_DIR / "xgboost.onnx"
 XGBOOST_CONFIG_PATH = MODELS_DIR / "xgboost_config.json"
-RF_ONNX_PATH = MODELS_DIR / "random_forest.onnx"
-RF_CONFIG_PATH = MODELS_DIR / "random_forest_config.json"
 
 DEFAULT_THRESHOLD = 0.3090
 ONNX_OPSET: dict[str, int] = {"": 17, "ai.onnx.ml": 3}
 
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 EMBEDDING_MODEL = ROOT_DIR / "hf_models/all-MiniLM-L6-v2"
 
 SYSTEM_PROMPTS: dict[str, str] = {
@@ -66,7 +65,10 @@ ACTIVE_SYSTEM_PROMPT_ID = "ba_copywriter_v1"
 
 class Settings(BaseSettings):
 
-    GROQ_API_KEY: SecretStr
+    GROQ_API_KEY: SecretStr = SecretStr("")
+    TOGETHER_API_KEY: SecretStr = SecretStr("")
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    LLM_FALLBACK_ENABLED: bool = False
 
     DEBUG_MODE: bool = False
 
@@ -76,7 +78,13 @@ class Settings(BaseSettings):
         extra='ignore'
     )
 
-settings=Settings()
+_settings: Settings | None = None
+
+def get_settings() -> Settings:
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
 
 def init_dirs() -> None:
     (DATA_DIR / "raw").mkdir(parents=True, exist_ok=True)
