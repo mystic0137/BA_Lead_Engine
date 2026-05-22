@@ -18,6 +18,7 @@ _EXPECTED_FEATURES = [
 _STRING_FEATURES = {"route", "booking_origin", "sales_channel", "trip_type", "flight_day"}
 _NUMERIC_FEATURES = [f for f in _EXPECTED_FEATURES if f not in _STRING_FEATURES]
 
+
 _onnx_patcher = patch("onnxruntime.InferenceSession")
 _mock_onnx_session = _onnx_patcher.start()
 _mock_onnx_instance = MagicMock()
@@ -46,6 +47,7 @@ def _mock_onnx_run(_, inputs_dict):
 
 _mock_onnx_instance.run.side_effect = _mock_onnx_run
 
+
 _chroma_patcher = patch("chromadb.PersistentClient")
 _mock_chroma = _chroma_patcher.start()
 _mock_collection = MagicMock()
@@ -56,13 +58,13 @@ _mock_collection.query.return_value = {
 }
 _mock_chroma.return_value.get_collection.return_value = _mock_collection
 
-import numpy as np
 
 _st_patcher = patch("sentence_transformers.SentenceTransformer")
 _mock_st = _st_patcher.start()
 _mock_model = MagicMock()
 _mock_model.encode.return_value = np.array([0.1] * 384)
 _mock_st.return_value = _mock_model
+
 
 _groq_patcher = patch("groq.Groq")
 _mock_groq_class = _groq_patcher.start()
@@ -148,3 +150,12 @@ def valid_single_record():
         "wants_in_flight_meals": 1,
         "flight_duration": 8.5,
     }
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_patches():
+    yield
+    _onnx_patcher.stop()
+    _chroma_patcher.stop()
+    _st_patcher.stop()
+    _groq_patcher.stop()
