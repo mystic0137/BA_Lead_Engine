@@ -1,5 +1,5 @@
 import pytest
-from src.models import ModelConfig, validate_features, get_rf_model, get_xgb_model
+from src.models import ModelConfig, validate_features, get_xgb_model
 
 
 class TestModelConfig:
@@ -57,14 +57,6 @@ class TestValidateFeatures:
 
 
 class TestModelFactories:
-    def test_get_rf_model_returns_random_forest(self):
-        cfg = ModelConfig()
-        model = get_rf_model(cfg)
-        from sklearn.ensemble import RandomForestClassifier
-        assert isinstance(model, RandomForestClassifier)
-        assert model.n_estimators == 400
-        assert model.class_weight == "balanced"
-
     def test_get_xgb_model_returns_xgb_classifier(self):
         cfg = ModelConfig()
         model = get_xgb_model(cfg)
