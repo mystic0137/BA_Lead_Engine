@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from src.config import (
     DEFAULT_THRESHOLD,
     ONNX_OPSET,
     RAW_DATA,
+    MODELS_DIR,
     RF_CONFIG_PATH,
     RF_ONNX_PATH,
     XGBOOST_CONFIG_PATH,
@@ -26,6 +28,7 @@ from src.data_check import verify_integrity
 
 logger = logging.getLogger(__name__)
 
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 def _xgb_shape_calculator(operator) -> None:
     """
