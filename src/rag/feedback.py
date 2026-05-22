@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from datetime import datetime
 from enum import Enum
 
@@ -7,6 +8,8 @@ from src.config import FINETUNING_DIR
 from src.rag.prompt_builder import build_user_prompt
 
 logger = logging.getLogger(__name__)
+
+os.makedirs(FINETUNING_DIR, exist_ok=True)
 
 FEEDBACK_LOG = FINETUNING_DIR / "feedback_log.jsonl"
 SFT_LOG = FINETUNING_DIR / "sft_log.jsonl"
@@ -159,7 +162,7 @@ def feedback_stats() -> dict:
     if not records:
         return {"total": 0}
 
-    ratings = [r["meta"]["rating"] for r in records]
+    ratings = [r["rating"] for r in records]
     edited = [r for r in records if r["meta"]["was_edited"]]
     contradictions = [r for r in records if r["meta"].get("contradiction")]
 
